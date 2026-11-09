@@ -37,6 +37,7 @@ import { releaseChannelFromNamespace, releaseChannelFromVersion } from "@open-de
 import { join } from "node:path";
 import { app, dialog } from "electron";
 
+import { APPIMAGE_LOCK_HELD_ENV, inheritedAppImageLockFds } from "./appimage-lock.js";
 import { readPackagedConfig } from "./config.js";
 import {
   claimPackagedDownloadAttribution,
@@ -51,6 +52,7 @@ import { PackagedPathAccessError } from "./errors.js";
 import {
   exitPackagedLauncherForExistingDesktop,
   findExistingPackagedDesktopOwner,
+  handOffDuplicatePackagedLaunch,
   inspectExistingDesktopForLauncher,
   waitForLauncherAfterQuit,
 } from "./launcher-after-quit.js";
@@ -184,6 +186,19 @@ async function main(): Promise<void> {
     namespace,
     source: convergedArgvStamp?.source ?? SIDECAR_SOURCES.PACKAGED,
   };
+  if (process.env[APPIMAGE_LOCK_HELD_ENV] === "1") {
+    // AppRun kept startup serialization by refusing to acquire the launch lock,
+    // then started this process only to hand the duplicate launch to the owner.
+    // Never reach the normal launch gate: it can restart or bootstrap.
+    await handOffDuplicatePackagedLaunch(launchStamp, {
+      deeplinkUrl: findPackagedDeeplinkArg(process.argv),
+      logger: console,
+      modes: [SIDECAR_MODES.RUNTIME, "headless"],
+      paths: initialPaths,
+    });
+    app.exit(0);
+    return;
+  }
   if (await runPackagedMcpActionAgainstExistingDaemon(headlessRequest, launchStamp)) {
     app.exit(0);
     return;
@@ -242,7 +257,9 @@ async function main(): Promise<void> {
     const command = await resolvePackagedElectronNodeCommand();
     if (command === process.execPath) throw new Error("hosted launcher requires a background Electron helper");
     await adoptSidecarProcess(launchStamp, generationResources, { command });
-  } else if (await bootstrapSidecarProcess(launchStamp, generationResources)) {
+  } else if (await bootstrapSidecarProcess(launchStamp, generationResources, {
+    inheritFds: inheritedAppImageLockFds(),
+  })) {
     app.exit(0);
     return;
   }
