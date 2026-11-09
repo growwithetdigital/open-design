@@ -188,7 +188,7 @@ export function spawnEnvForAgent(
     }
     return finalizeRuntimeEnv(env, sandboxRuntime);
   }
-  if (agentId === 'opencode' || agentId === 'byok-opencode') {
+  if (agentId === 'byok-opencode') {
     stripKeysCaseInsensitive(env, [
       'OPENCODE',
       'OPENCODE_PID',
@@ -203,6 +203,35 @@ export function spawnEnvForAgent(
     // Disable project-config discovery (and its install) so OpenCode only honors
     // the config the daemon injects via OPENCODE_CONFIG_CONTENT — this is exactly
     // what the AMR path already does for its private OpenCode server.
+    if (!env.OPENCODE_DISABLE_PROJECT_CONFIG?.trim()) {
+      env.OPENCODE_DISABLE_PROJECT_CONFIG = 'true';
+    }
+    // Isolate BYOK OpenCode from the user's global ~/.config/opencode/opencode.json
+    // so that version-incompatible keys (e.g. "update", "plugins", "providers" from
+    // another opencode build) do not surface as "Configuration is invalid" errors
+    // during BYOK runs. Both OPENCODE_TEST_HOME and XDG_CONFIG_HOME must point to
+    // the isolated home; OPENCODE_TEST_HOME makes OpenCode use a clean per-run home,
+    // while XDG_CONFIG_HOME prevents the Vela companion from picking up incompatible
+    // global config from an inherited shell environment. See #9365.
+    if (env.OD_DATA_DIR?.trim()) {
+      const isolatedHome = path.join(env.OD_DATA_DIR.trim(), 'byok-opencode-home');
+      env.OPENCODE_TEST_HOME = isolatedHome;
+      // Only override inherited XDG_CONFIG_HOME; respect an explicit BYOK-configured
+      // override from Settings → Local CLI → Advanced.
+      const configuredXdg = String(expandedConfiguredEnv['XDG_CONFIG_HOME'] ?? '').trim();
+      if (!configuredXdg) {
+        env.XDG_CONFIG_HOME = path.join(isolatedHome, '.config');
+      }
+    }
+    return finalizeRuntimeEnv(env, sandboxRuntime);
+  }
+  if (agentId === 'opencode') {
+    stripKeysCaseInsensitive(env, [
+      'OPENCODE',
+      'OPENCODE_PID',
+      'OPENCODE_RUN_ID',
+      'OPENCODE_SERVER_PASSWORD',
+    ]);
     if (!env.OPENCODE_DISABLE_PROJECT_CONFIG?.trim()) {
       env.OPENCODE_DISABLE_PROJECT_CONFIG = 'true';
     }
